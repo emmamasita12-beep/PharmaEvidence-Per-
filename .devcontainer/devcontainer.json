@@ -1,0 +1,8 @@
+{
+  "name": "PharmaAcademic AI",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "forwardPorts": [3000],
+  "portsAttributes": { "3000": { "label": "PharmaAcademic AI", "onAutoForward": "notify" } },
+  "postCreateCommand": "npm ci",
+  "customizations": { "vscode": { "extensions": ["bradlc.vscode-tailwindcss"] } }
+}

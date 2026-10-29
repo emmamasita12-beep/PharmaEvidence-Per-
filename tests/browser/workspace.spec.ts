@@ -1,0 +1,67 @@
+import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+test('flujo real: evaluación, revisión, rúbrica, persistencia y exportación',async({page})=>{
+ await page.goto('/');
+ await expect(page.getByRole('heading',{name:'De una buena pregunta, a una investigación sólida.'})).toBeVisible();
+ await page.getByRole('button',{name:'Evaluar un título',exact:true}).click();
+ await page.getByRole('button',{name:'Usar ejemplo ficticio'}).click();
+ await page.getByRole('button',{name:'Evaluar y guardar'}).click();
+ await expect(page.getByRole('heading',{name:'Diagnóstico preliminar'})).toBeVisible();
+ await expect(page.getByRole('main').getByText('No evaluables con el título.',{exact:false})).toBeVisible();
+ await page.getByLabel('Nota o corrección editable').first().fill('Reducir extensión con mi asesor');
+ await page.getByLabel('Seguimiento').first().selectOption('Aceptada');
+ await page.getByRole('button',{name:'Guardar observaciones'}).click();
+ await page.getByRole('button',{name:'Calificación y rúbricas',exact:true}).click();
+ await page.getByLabel('Puntuación (vacío = no evaluable)',{exact:true}).first().fill('0');
+ await page.getByRole('button',{name:'Validar y guardar rúbrica'}).click();
+ await expect(page.locator('.error[role=alert]')).toContainText('exige puntuación');
+ await page.getByLabel('Evidencia (fragmento, documento o enlace)',{exact:true}).first().fill('Prueba manual documentada');
+ await page.getByLabel('Justificación, incertidumbre y mejora',{exact:true}).first().fill('No cumple el criterio según revisión manual de ejemplo');
+ await page.getByRole('button',{name:'Validar y guardar rúbrica'}).click();
+ await expect(page.getByText('0 / 15 evaluables')).toBeVisible();
+ await page.reload();
+ await page.getByRole('button',{name:/Historial de proyectos/}).click();
+ await expect(page.getByRole('heading',{name:/Formulación/})).toBeVisible();
+ await page.getByRole('button',{name:'Abrir proyecto'}).click();
+ await expect(page.getByLabel('Nota o corrección editable').first()).toHaveValue('Reducir extensión con mi asesor');
+ await page.getByRole('button',{name:'Exportar informe',exact:true}).click();
+ const downloaded=page.waitForEvent('download');
+ await page.getByRole('button',{name:'Informe DOCX'}).click();
+ const file=await downloaded;const path=await file.path();
+ expect(readFileSync(path!).subarray(0,2).toString()).toBe('PK');
+ await file.saveAs('/tmp/pharmaacademic-tested-report.docx');
+ const jsonDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Respaldo JSON',exact:true}).click();
+ const json=await jsonDownload;const project=JSON.parse(readFileSync((await json.path())!,'utf8'));
+ expect(project.rubric[0].score).toBe(0);expect(project.reviews['0'].status).toBe('Aceptada');
+ await page.getByLabel('Selecciona un respaldo JSON (máximo 2 MB)').setInputFiles({name:'respaldo.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(project))});
+ await expect(page.getByRole('status')).toContainText('guardado');
+ await page.emulateMedia({media:'print'});await expect(page.locator('.print-report')).toContainText('NO EVALUABLE');
+ await page.pdf({path:'/tmp/pharmaacademic-tested-report.pdf',format:'A4'});
+});
+test('errores de consulta se muestran sin resultados fabricados',async({page})=>{
+ await page.route('**/api/search?**',route=>route.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:'Proveedor no disponible. No se generaron fuentes de reemplazo.'})}));
+ await page.goto('/');await page.getByRole('button',{name:'Investigador bibliográfico',exact:true}).click();
+ await page.getByLabel('Estrategia de búsqueda o DOI (Crossref)').fill('Zingiber officinale');
+ await page.getByRole('button',{name:'Buscar publicaciones',exact:true}).click();
+ await expect(page.locator('.error[role=alert]')).toContainText('No se generaron fuentes');
+ await expect(page.locator('.source-card')).toHaveCount(0);
+});
+test('móvil: navegación accesible y sin desborde horizontal',async({page})=>{
+ await page.setViewportSize({width:390,height:844});await page.goto('/');
+ await expect(page.getByRole('button',{name:'Abrir menú'})).toBeVisible();
+ await page.getByRole('button',{name:'Abrir menú'}).click();
+ await page.getByRole('button',{name:'Farmacia Clínica Pendiente',exact:true}).click();
+ await expect(page.getByText('Este módulo está pendiente de implementación.',{exact:false})).toBeVisible();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+});
+test('API valida consultas antes de acceder al proveedor',async({request})=>{
+ const response=await request.get('/api/search?provider=Invalid&query=x');expect(response.status()).toBe(400);
+});
+test('vincula una consulta de prueba al proyecto y la conserva al recargar',async({page})=>{
+ const fixture={provider:'Crossref',query:'consulta fixture',filter:'Sin filtro de año; máximo 10 registros',consultedAt:'2026-01-01T00:00:00.000Z',warnings:['Fixture sintético de prueba, no evidencia real.'],sources:[{id:'crossref:10.1234/fixture',provider:'Crossref',title:'Registro sintético solo para prueba de interfaz',authors:['Autor ficticio A'],year:'2024',journal:'Revista ficticia',doi:'10.1234/fixture',url:'https://doi.org/10.1234/fixture',abstract:null,status:'No verificado; fixture',consultedAt:'2026-01-01T00:00:00.000Z',verification:'Metadatos sintéticos de prueba'}]};
+ await page.route('**/api/search?**',r=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify(fixture)}));
+ await page.goto('/');await page.getByRole('button',{name:'Evaluar un título',exact:true}).click();await page.getByRole('button',{name:'Usar ejemplo ficticio'}).click();await page.getByRole('button',{name:'Evaluar y guardar'}).click();
+ await page.getByRole('button',{name:'Investigador bibliográfico',exact:true}).click();await page.getByLabel('Estrategia de búsqueda o DOI (Crossref)').fill('consulta fixture');await page.getByRole('button',{name:'Buscar publicaciones',exact:true}).click();
+ await expect(page.locator('.source-card')).toContainText('Registro sintético');await page.getByRole('button',{name:'Vincular consulta'}).click();
+ await page.reload();await page.getByRole('button',{name:/Historial de proyectos/}).click();await page.getByRole('button',{name:'Abrir proyecto'}).click();await page.getByRole('button',{name:'Investigador bibliográfico',exact:true}).click();await expect(page.getByRole('heading',{name:'Estrategias guardadas en este proyecto'})).toBeVisible();await expect(page.getByRole('main')).toContainText('consulta fixture');
+});
